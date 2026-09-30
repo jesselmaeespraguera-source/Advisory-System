@@ -1,54 +1,121 @@
+import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
-import 'dotenv/config';
-import { PrismaClient } from '../src/generated/prisma/client';
 import { faker } from '@faker-js/faker';
+import 'dotenv/config';
+
+const databaseUrl = process.env.DATABASE_URL;
+
+if (!databaseUrl) {
+  throw new Error('DATABASE_URL is not set');
+}
+
+const url = new URL(databaseUrl);
 
 const adapter = new PrismaMariaDb({
-  host: 'localhost',
-  port: 3308,
-  user: 'root',
-  password: process.env.DB_PASSWORD,
-  database: 'advisory_monitoring',
+  host: url.hostname,
+  port: Number(url.port) || 3306,
+  user: decodeURIComponent(url.username),
+  password: decodeURIComponent(url.password),
+  database: url.pathname.replace(/^\//, ''),
+  connectionLimit: 5,
 });
 
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
-  const programNames = [
-    'BS Information Technology',
-    'BS Computing Science',
-    'BS Information Systems',
-  ];
-  const programs = await Promise.all(
-    programNames.map((name) => prisma.program.create({ data: { name } })),
-  );
+  console.log('🌱 Seeding database...');
 
-  const studentsData = Array.from({ length: 10 }).map(() => ({
-    name: faker.person.fullName(),
-    programId: faker.helpers.arrayElement(programs).id,
-  }));
-  await prisma.student.createMany({ data: studentsData });
-  console.log('Seeded 3 programs and 10 students');
+  // Create Programs
+  const programs = [];
 
-  const adviserNames = [
-    'Prof. Ana Reyes',
-    'Prof. Mark Villanueva',
-    'Prof. Liza Cortes',
-  ];
+  for (let i = 0; i < 3; i++) {
+    const program = await prisma.program.create({
+      data: {
+        name: faker.helpers.arrayElement([
+          'BS Information Technology',
+          'BS Computer Science',
+          'BS Information Systems',
+        ]),
+      },
+    });
 
-  await Promise.all(
-    programs.map((program, index) =>
-      prisma.adviser.create({
-        data: { 
-          name: adviserNames[index] ?? faker.person.fullName(),
+    programs.push(program);
+  }
+
+  // Create Students
+  for (let i = 0; i < 20; i++) {
+    const program = faker.helpers.arrayElement(programs);
+
+    await prisma.student.create({
+      data: {
+        name: faker.person.fullName(),
+        programId: program.id,
+      },
+    });
+  }
+
+  // Create Advisers
+  for (const program of programs) {
+    await prisma.adviser.create({
+      data: {
+        name: faker.person.fullName(),
+        programId: program.id,
+      },
+    });
+  }
+
+  // Create Subjects
+  for (const program of programs) {
+    for (let i = 0; i < 3; i++) {
+      await prisma.subject.create({
+        data: {
+          description: faker.helpers.arrayElement([
+            'Database Management',
+            'Web Development',
+            'Data Structures',
+            'Programming',
+            'Computer Networks',
+            'Software Engineering',
+          ]),
           programId: program.id,
         },
-      }),
-    ),
-  );
-  console.log(`Seeded ${programs.length} adviser(s)`);
+      });
+    }
+  }
+
+  // Get students for remarks
+  const students = await prisma.student.findMany();
+
+  // Create Remarks
+  for (const student of students) {
+    await prisma.remark.create({
+      data: {
+        studentId: student.id,
+        content: faker.helpers.arrayElement([
+          'Good academic performance.',
+          'Needs improvement in programming.',
+          'Shows good participation in class.',
+          'Should improve attendance.',
+          'Performing well in the subject.',
+        ]),
+        category: faker.helpers.arrayElement([
+          'academic',
+          'attendance',
+          'behavior',
+          'performance',
+        ]),
+      },
+    });
+  }
+
+  console.log('✅ Database seeded successfully!');
 }
 
 main()
-  .catch((e) => console.error(e))
-  .finally(async () => await prisma.$disconnect());
+  .catch((error) => {
+    console.error('❌ Seed failed:', error);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
